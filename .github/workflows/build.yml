@@ -1,0 +1,87 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Extract Project Files
+        run: |
+          unzip -o "*.zip" || true
+          rm -f bun.lock* package-lock.json
+
+      - name: Fix Missing Local Dependencies
+        run: |
+          node -e '
+            const fs = require("fs");
+            if (fs.existsSync("package.json")) {
+              const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+              if (pkg.dependencies) {
+                for (const key of Object.keys(pkg.dependencies)) {
+                  if (pkg.dependencies[key].startsWith("file:") || pkg.dependencies[key].includes("space-sdk")) {
+                    delete pkg.dependencies[key];
+                  }
+                }
+              }
+              if (pkg.devDependencies) {
+                for (const key of Object.keys(pkg.devDependencies)) {
+                  if (pkg.devDependencies[key].startsWith("file:") || pkg.devDependencies[key].includes("space-sdk")) {
+                    delete pkg.devDependencies[key];
+                  }
+                }
+              }
+              fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
+            }
+          '
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+
+      - name: Install Dependencies
+        run: |
+          bun install --no-save || npm install --legacy-peer-deps
+
+      - name: Build Web Assets
+        run: |
+          bun run build:client || npm run build:client || npm run build
+
+      - name: Setup Capacitor
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          WEB_DIR="dist"
+          if [ -d "client/dist" ]; then WEB_DIR="client/dist"; elif [ -d "build" ]; then WEB_DIR="build"; fi
+          npx cap init "Bolo Chat" "com.bolochat.app" --web-dir $WEB_DIR
+          npx cap add android
+          npx cap copy
+
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: bolo-chat-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          
